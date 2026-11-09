@@ -59,6 +59,108 @@ def save_uploaded_reference(file_name: str, data: bytes) -> str:
     return path
 
 
+_YT_URL_RE = re.compile(
+    r"^(https?://)?(www\.|m\.)?(youtube\.com/(watch|shorts)|youtu\.be/)", re.I
+)
+_MAX_REFERENCE_DURATION_SEC = 1200  # 20 min — analysis cost grows with length
+
+
+def is_youtube_url(value: str) -> bool:
+    return bool(_YT_URL_RE.match((value or "").strip()))
+
+
+def _ytdlp_ffmpeg_dir() -> str:
+    """Directory containing an ``ffmpeg.exe`` yt-dlp can find.
+
+    The bundled imageio-ffmpeg binary carries a versioned name that yt-dlp's
+    executable probe does not recognize, so expose it under the canonical
+    name via a hardlink (no admin rights needed, same volume).
+    """
+    binary = utils.get_ffmpeg_binary()
+    directory = os.path.dirname(binary)
+    canonical = os.path.join(directory, "ffmpeg.exe")
+    if not os.path.isfile(canonical):
+        try:
+            os.link(binary, canonical)
+        except OSError:
+            import shutil
+
+            shutil.copy2(binary, canonical)
+    return directory
+
+
+def download_youtube_reference(url: str, progress: ProgressCallback = None) -> str:
+    """Download a YouTube video as the style reference; returns the file path.
+
+    Uses yt-dlp (already a project dependency for the niche scout). Picks a
+    ≤720p mp4 to keep downloads and scene detection fast. A new download
+    invalidates the previous analysis, same as a new upload.
+    """
+    import yt_dlp
+
+    url = (url or "").strip()
+    if not is_youtube_url(url):
+        raise ValueError(f"not a YouTube video URL: {url!r}")
+    directory = utils.storage_dir(_PROFILE_DIR, create=True)
+    target = os.path.join(directory, "reference.mp4")
+
+    def _hook(d):
+        if not progress or d.get("status") != "downloading":
+            return
+        try:
+            downloaded = d.get("downloaded_bytes") or 0
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            progress("download", int(downloaded // 1024), max(int(total // 1024), 1))
+        except Exception:
+            pass
+
+    # Clean previous downloads so the post-download glob is unambiguous.
+    for stale in os.listdir(directory):
+        if stale.startswith("reference."):
+            try:
+                os.remove(os.path.join(directory, stale))
+            except OSError:
+                pass
+
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        # Any ≤720p variant wins; fall back to whatever the video has.
+        # Separate video+audio tracks merge into mp4 via ffmpeg.
+        "format": "best[height<=720]/bestvideo[height<=720]+bestaudio/best",
+        "merge_output_format": "mp4",
+        "outtmpl": os.path.join(directory, "reference.%(ext)s"),
+        "overwrites": True,
+        "match_filter": yt_dlp.utils.match_filter_func(
+            f"duration <= {_MAX_REFERENCE_DURATION_SEC} & !is_live & !is_upcoming"
+        ),
+        "progress_hooks": [_hook],
+        # The project bundles ffmpeg (imageio-ffmpeg), it is not on PATH.
+        "ffmpeg_location": _ytdlp_ffmpeg_dir(),
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+    if not os.path.isfile(target):
+        candidates = [
+            os.path.join(directory, name)
+            for name in os.listdir(directory)
+            if name.startswith("reference.")
+            and os.path.splitext(name)[1].lower() in {".mp4", ".mov", ".webm", ".mkv"}
+        ]
+        if not candidates:
+            raise FileNotFoundError("yt-dlp finished but produced no reference file")
+        target = candidates[0]
+    # A new reference invalidates the previous analysis.
+    profile = _profile_path()
+    if os.path.isfile(profile):
+        try:
+            os.remove(profile)
+        except OSError:
+            pass
+    return target
+
+
 def load_profile() -> Optional[Dict[str, Any]]:
     path = _profile_path()
     if not os.path.isfile(path):
@@ -148,6 +250,16 @@ def _transcribe(video_path: str) -> str:
     from app.services import subtitle
     from app.utils.subtitle_reader import file_to_subtitles
 
+    # Only the hook and speech rate are needed, so transcribe with the small
+    # whisper model: large-v3 on CPU runs several times slower than realtime.
+    # The small model is unloaded afterwards so real subtitle generation
+    # still gets the configured (usually large) model.
+    swapped_model = False
+    previous_size = subtitle.model_size
+    if subtitle.model is None and previous_size != "small":
+        subtitle.model_size = "small"
+        swapped_model = True
+
     with tempfile.TemporaryDirectory(prefix="reference-audio-") as temp_dir:
         audio_file = os.path.join(temp_dir, "reference.wav")
         subtitle_file = os.path.join(temp_dir, "reference.srt")
@@ -158,6 +270,10 @@ def _transcribe(video_path: str) -> str:
         except Exception as e:
             logger.warning(f"reference transcription failed: {e}")
             return ""
+        finally:
+            if swapped_model:
+                subtitle.model_size = previous_size
+                subtitle.model = None
         if not os.path.isfile(subtitle_file):
             return ""
         items = file_to_subtitles(subtitle_file)

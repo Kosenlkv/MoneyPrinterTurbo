@@ -6159,6 +6159,29 @@ def _render_reference_style_controls(params):
     with st.container(key="reference_style_section"):
         with st.expander(tr("Reference Style Expander"), expanded=False):
             st.caption(tr("Reference Style Help"))
+            yt_col, yt_btn_col = st.columns([3, 1])
+            youtube_url = yt_col.text_input(
+                tr("Reference YouTube URL"),
+                placeholder="https://www.youtube.com/watch?v=…",
+                key="reference_youtube_url",
+                label_visibility="collapsed",
+            )
+            if yt_btn_col.button(
+                tr("Reference YouTube Download"),
+                key="download_reference_youtube",
+                disabled=not reference_style.is_youtube_url(youtube_url or ""),
+                use_container_width=True,
+            ):
+                with st.spinner(tr("Reference YouTube Downloading")):
+                    try:
+                        path = reference_style.download_youtube_reference(youtube_url)
+                        st.session_state["reference_video_name"] = youtube_url
+                        st.session_state["reference_video_path"] = path
+                        st.session_state.pop("reference_profile_cache", None)
+                        st.success(tr("Reference YouTube Downloaded"))
+                    except Exception as e:
+                        logger.error(f"failed to download YouTube reference: {e}")
+                        st.error(tr("Reference YouTube Failed"))
             uploaded = st.file_uploader(
                 tr("Reference Video Upload"),
                 type=["mp4", "mov", "webm", "mkv"],
