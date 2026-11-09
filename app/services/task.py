@@ -31,6 +31,7 @@ from app.services import (
     metaso_minimax,
     muapi,
     ofox,
+    puter_image,
     sonilo,
     subtitle,
     task_artifacts,
@@ -103,7 +104,7 @@ _VIDEO_MUSIC_PROVIDERS = {
 _SUPPORTED_VIDEO_SOURCES = frozenset({
     "pexels", "pixabay", "coverr", "local", "wavespeed",
     "volcengine_seedance", "ofox", "metaso_minimax", "muapi",
-    "loomloom", "openai_image", "codex_image", "gemini_image", "infistar", "jalapeno",
+    "loomloom", "openai_image", "codex_image", "gemini_image", "puter_image", "infistar", "jalapeno",
 })
 
 
@@ -1690,6 +1691,20 @@ def _run_pipeline(
             "Gemini image source requires gemini_image_api_key or "
             "gemini_api_key in config.toml ([app] section); get a key at "
             "https://aistudio.google.com/apikey",
+        )
+
+    if (
+        stop_at in {"materials", "video"}
+        and params.video_source == "puter_image"
+        and not puter_image.is_enabled(
+            config.snapshot_config_with_pending(config.app)
+        )
+    ):
+        return _mark_task_failed(
+            task_id,
+            "preflight",
+            "Puter image source requires puter_api_key in config.toml "
+            "([app] section); create a token at https://puter.com/dashboard",
         )
 
     # 只有完整成片流程需要视频配乐供应商。尽早阻止缺少 Key 的完整任务，避免

@@ -245,6 +245,19 @@ gemini_image_base_url = ""
 # Leave empty to use gemini-2.5-flash-image (Nano Banana).
 gemini_image_model = ""
 
+# Puter image generation ("Nano Banana" through the Puter AI gateway) as an
+# on-demand text-to-image material source. Works even where Google's own
+# free tier allows no image generations; usage is billed to your Puter
+# account (~$0.039 per image). Create a token at
+# https://puter.com/dashboard ("Create token").
+puter_api_key = ""
+# Leave empty to use https://api.puter.com; set an override only for a
+# self-hosted Puter instance.
+puter_base_url = ""
+# Leave empty to use google/gemini-2.5-flash-image (Nano Banana).
+# Also available: google/gemini-3.1-flash-image, google/gemini-3-pro-image.
+puter_image_model = ""
+
 # Optional TwelveLabs integration for semantic material ranking and video QA.
 # Install the optional dependency with: uv sync --extra twelvelabs
 # Create an API key at https://playground.twelvelabs.io/

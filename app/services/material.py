@@ -34,6 +34,7 @@ from app.services import (
     metaso_minimax,
     muapi,
     ofox,
+    puter_image,
     task_artifacts,
     video,
     volcengine_seedance,
@@ -1970,6 +1971,70 @@ def generate_images_gemini(
     return [item]
 
 
+def generate_images_puter(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    save_dir: str = "",
+) -> List[MaterialInfo]:
+    """Generate one Puter ("Nano Banana" via Puter gateway) image per keyword.
+
+    Same signature and empty-list failure convention as
+    :func:`generate_images_gemini`. Configuration errors (missing auth
+    token) abort the whole task before any paid generation happens;
+    per-image failures skip the keyword and continue.
+    """
+    aspect = VideoAspect(video_aspect)
+    if minimum_duration <= 0:
+        return []
+    try:
+        if not puter_image.api_key():
+            raise puter_image.PuterImageError(
+                "puter_api_key_missing",
+                "set puter_api_key in config.toml ([app] section); "
+                "create a token at https://puter.com/dashboard",
+            )
+        aspect_hint = (
+            "9:16"
+            if aspect == VideoAspect.portrait
+            else "16:9" if aspect == VideoAspect.landscape else "1:1"
+        )
+        prompt = (
+            f"Cinematic photo of {search_term}, photorealistic, high detail. "
+            f"Compose the image for a {aspect_hint} video frame."
+        )
+        generation_progress.submitting("puter_image")
+        image_bytes = puter_image.generate_image(prompt, aspect_hint=aspect_hint)
+    except puter_image.PuterImageError:
+        raise
+    except Exception as e:
+        logger.error(
+            f"puter image generation failed unexpectedly: term={search_term!r}, "
+            f"error={type(e).__name__}, detail={e}"
+        )
+        return []
+    if image_bytes is None:
+        return []
+    try:
+        image_path, width, height = _save_openai_image_file(image_bytes, save_dir)
+    except _OpenAIImageDecodeError as e:
+        logger.error(
+            "puter image response is not a decodable image, skipping term: "
+            f"term={search_term!r}, error={type(e).__name__}, detail={e}"
+        )
+        return []
+    item = MaterialInfo()
+    item.provider = "puter_image"
+    item.url = image_path
+    item.duration = max(int(minimum_duration), 1)
+    item.source_info = {
+        "provider": "puter_image",
+        "search_term": search_term,
+        "rendition": {"id": None, "width": width, "height": height},
+    }
+    return [item]
+
+
 def _render_openai_image_video(
     image_path: str, clip_duration: int, image_motion: ImageMotion = ImageMotion.zoom
 ) -> str:
@@ -2537,7 +2602,7 @@ def download_videos(
             max_clip_duration=max_clip_duration,
             material_directory=material_directory,
         )
-    if source in {"openai_image", "codex_image", "gemini_image"}:
+    if source in {"openai_image", "codex_image", "gemini_image", "puter_image"}:
         # 与 WaveSpeed 相同的按需付费语义：文生图按张计费，逐段生成、凑够
         # 所需时长立即停止。生成结果是一次性的本地图片文件，也不参与 24
         # 小时搜索缓存——缓存会让不同任务反复拿到同一张图。
@@ -2551,6 +2616,11 @@ def download_videos(
         elif source == "gemini_image":
             image_options = {
                 "image_generator": generate_images_gemini,
+                "provider": source,
+            }
+        elif source == "puter_image":
+            image_options = {
+                "image_generator": generate_images_puter,
                 "provider": source,
             }
         return _download_videos_openai_image_on_demand(

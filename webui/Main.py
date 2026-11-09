@@ -58,6 +58,7 @@ from app.services import (
     infistar_video,
     jalapeno_video,
     ofox,
+    puter_image,
     reference_style,
     subtitle,
     video,
@@ -147,7 +148,7 @@ VIDEO_SOURCE_GROUPS = {
         "wavespeed",
         "muapi",
     ),
-    "ai_image": ("openai_image", "codex_image", "gemini_image"),
+    "ai_image": ("openai_image", "codex_image", "gemini_image", "puter_image"),
     "local": ("local",),
 }
 # Upload-Post 的 API Key 与发布用户分别在两个页面管理，并且发布用户名称
@@ -3422,6 +3423,7 @@ def _material_provider_labels():
         "openai_image": tr("OpenAI Compatible Text-to-Image"),
         "codex_image": tr("codex.image.label"),
         "gemini_image": tr("Gemini Image (Nano Banana)"),
+        "puter_image": tr("Puter Image (Nano Banana)"),
         "local": tr("Local file"),
     }
 
@@ -4254,6 +4256,59 @@ def _render_material_provider_settings(provider):
             )
             _set_runtime_config("app", "gemini_image_base_url", gemini_base_url.strip())
         st.caption(tr("Gemini Image Configuration Example"))
+    elif provider == "puter_image":
+        st.markdown(f"**{tr('Puter Image (Nano Banana)')}**")
+
+        puter_api_key = st.text_input(
+            tr("Puter Auth Token"),
+            value=str(app_settings.get("puter_api_key", "") or ""),
+            type="password",
+            help=tr("Puter Auth Token Help"),
+            key="puter_api_key_input",
+            on_change=_save_settings_change,
+            args=(
+                "app",
+                "puter_api_key",
+                "puter_api_key_input",
+                lambda value: value.strip(),
+            ),
+        )
+        _set_runtime_config("app", "puter_api_key", puter_api_key.strip())
+
+        puter_image_model = st.text_input(
+            tr("Puter Image Model"),
+            value=str(app_settings.get("puter_image_model", "") or ""),
+            placeholder="google/gemini-2.5-flash-image",
+            key="puter_image_model_input",
+            on_change=_save_settings_change,
+            args=(
+                "app",
+                "puter_image_model",
+                "puter_image_model_input",
+                lambda value: value.strip(),
+            ),
+        )
+        _set_runtime_config(
+            "app", "puter_image_model", puter_image_model.strip()
+        )
+
+        with st.expander(tr("Puter Image Advanced Settings"), expanded=False):
+            puter_base_url = st.text_input(
+                tr("Puter Base URL"),
+                value=str(app_settings.get("puter_base_url", "") or ""),
+                placeholder="https://api.puter.com",
+                help=tr("Puter Base URL Help"),
+                key="puter_base_url_input",
+                on_change=_save_settings_change,
+                args=(
+                    "app",
+                    "puter_base_url",
+                    "puter_base_url_input",
+                    lambda value: value.strip(),
+                ),
+            )
+            _set_runtime_config("app", "puter_base_url", puter_base_url.strip())
+        st.caption(tr("Puter Image Configuration Example"))
 
 
 @st.dialog(
@@ -6620,7 +6675,7 @@ def _render_video_settings(panel, params):
                 "ui", "video_fit_mode", params.video_fit_mode.value
             )
 
-            if params.video_source in {"local", "openai_image", "codex_image", "gemini_image"}:
+            if params.video_source in {"local", "openai_image", "codex_image", "gemini_image", "puter_image"}:
                 image_motion_labels = {
                     ImageMotion.static.value: tr("Static Image"),
                     ImageMotion.zoom.value: tr("Slow Zoom"),
@@ -9605,6 +9660,13 @@ def _render_generation_controls(
         ):
             _remove_active_generation_task(task_id)
             st.error(tr("Please Configure the Gemini Image Source"))
+            st.stop()
+
+        if params.video_source == "puter_image" and not puter_image.is_enabled(
+            config.snapshot_config_with_pending(config.app)
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Please Configure the Puter Image Source"))
             st.stop()
 
         loomloom_video_request = None
