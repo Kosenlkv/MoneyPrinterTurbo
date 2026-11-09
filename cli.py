@@ -81,9 +81,9 @@ def _positive_int(value: str) -> int:
 
 def _paragraph_count(value: str) -> int:
     parsed = int(value)
-    if parsed < 1 or parsed > 10:
+    if parsed < 1 or parsed > 20:
         raise argparse.ArgumentTypeError(
-            f"paragraph-number must be between 1 and 10, got {parsed}"
+            f"paragraph-number must be between 1 and 20, got {parsed}"
         )
     return parsed
 
@@ -338,7 +338,16 @@ Batch manifests:
         "--paragraph-number",
         type=_paragraph_count,
         default=None,
-        help="number of generated script paragraphs, from 1 to 10 (default: 1)",
+        help="number of generated script paragraphs, from 1 to 20 (default: 1); "
+        "in --long-video mode this is the number of chapters",
+    )
+    content_group.add_argument(
+        "--long-video",
+        dest="long_video_mode",
+        action="store_true",
+        default=None,
+        help="generate a long-form script chapter by chapter "
+        "(5-30 minutes; --paragraph-number sets the chapter count)",
     )
     content_group.add_argument(
         "--video-script-prompt",
@@ -970,6 +979,7 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
     optional_arg_names = [
         "video_language",
         "paragraph_number",
+        "long_video_mode",
         "video_script_prompt",
         "custom_system_prompt",
         "video_fit_mode",
