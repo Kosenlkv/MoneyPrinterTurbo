@@ -288,6 +288,52 @@ class VideoSocialMetadataRequest(VideoSocialMetadataParams, BaseModel):
     pass
 
 
+class NicheScanParams:
+    """
+    {
+      "queries": ["science facts"],
+      "days": 31,
+      "max_subscribers": 100000,
+      "min_views": 1000,
+      "per_query": 10
+    }
+    """
+
+    queries: Optional[List[str]] = ["science facts"]
+    days: Optional[int] = 31
+    max_subscribers: Optional[int] = 100000
+    min_views: Optional[int] = 1000
+    per_query: Optional[int] = 10
+
+
+class NicheScanRequest(NicheScanParams, BaseModel):
+    queries: List[str] = Field(min_length=1, max_length=10)
+    days: int = Field(default=31, ge=1, le=365)
+    max_subscribers: int = Field(default=100000, ge=0)
+    min_views: int = Field(default=1000, ge=0)
+    per_query: int = Field(default=10, ge=1, le=30)
+
+
+class NicheQueriesParams:
+    """
+    {
+      "topic": "science facts",
+      "language": "ru",
+      "count": 5
+    }
+    """
+
+    topic: Optional[str] = "science facts"
+    language: Optional[str] = "ru"
+    count: Optional[int] = 5
+
+
+class NicheQueriesRequest(NicheQueriesParams, BaseModel):
+    topic: str = Field(min_length=1, max_length=200)
+    language: Optional[str] = Field(default="ru", max_length=32)
+    count: int = Field(default=5, ge=1, le=10)
+
+
 # ---------------------------
 # ----- RESPONSE MODELS -----
 # ---------------------------
@@ -508,6 +554,81 @@ class VideoSocialMetadataResponse(BaseResponse):
                     "caption": "Save this quick Shanghai inspiration and follow for more short travel ideas.",
                     "hashtags": ["#shorts", "#travel", "#shanghai", "#viral", "#fyp"],
                 },
+            },
+        }
+    )
+
+
+class NicheVideo(BaseModel):
+    video_id: Optional[str] = None
+    title: str = ""
+    url: str = ""
+    channel: str = ""
+    channel_url: str = ""
+    subscribers: Optional[int] = None
+    views: int = 0
+    age_days: Optional[int] = None
+    upload_date: Optional[str] = None
+    duration_sec: int = 0
+    thumbnail: Optional[str] = None
+    views_per_day: float = 0.0
+    view_sub_ratio: Optional[float] = None
+    score: float = 0.0
+
+
+class NicheScanData(BaseModel):
+    videos: List[NicheVideo]
+    scanned: int = 0
+    elapsed_sec: float = 0.0
+
+
+class NicheScanResponse(BaseResponse):
+    data: NicheScanData
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": 200,
+                "message": "success",
+                "data": {
+                    "videos": [
+                        {
+                            "video_id": "abc123",
+                            "title": "Why It's Impossible for Any Alien Ship to Enter Our Solar System",
+                            "url": "https://www.youtube.com/watch?v=abc123",
+                            "channel": "Space Facts",
+                            "channel_url": "https://www.youtube.com/@spacefacts",
+                            "subscribers": 4930,
+                            "views": 140038,
+                            "age_days": 19,
+                            "upload_date": "20261021",
+                            "duration_sec": 612,
+                            "views_per_day": 7370.4,
+                            "view_sub_ratio": 28.41,
+                            "score": 209393.06,
+                        }
+                    ],
+                    "scanned": 20,
+                    "elapsed_sec": 76.5,
+                },
+            },
+        }
+    )
+
+
+class NicheQueriesData(BaseModel):
+    queries: List[str]
+
+
+class NicheQueriesResponse(BaseResponse):
+    data: NicheQueriesData
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "status": 200,
+                "message": "success",
+                "data": {"queries": ["science facts", "space mysteries"]},
             },
         }
     )
