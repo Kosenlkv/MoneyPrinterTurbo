@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import time
 import unicodedata
 import wave
 from datetime import timedelta
@@ -1653,7 +1654,126 @@ def azure_tts_v1(
                         "failed to remove temporary Edge TTS audio: "
                         f"{temp_path}, error: {remove_error}"
                     )
-    return None
+    # Одним запросом Edge TTS иногда отклоняет длинные тексты
+    # (NoAudioReceived/timeout), хотя те же фразы по отдельности озвучиваются
+    # нормально. Запасной путь — синтез по предложениям со склейкой аудио и
+    # сдвигом таймингов субтитров на накопленную длительность.
+    logger.info("falling back to sentence-chunked Edge TTS synthesis")
+    return _azure_tts_v1_chunked(text, voice_name, rate_str, voice_file)
+
+
+def _azure_tts_v1_chunked(
+    text: str, voice_name: str, rate_str: str, voice_file: str
+) -> Union[SubMaker, None]:
+    """Synthesize long text sentence-by-sentence and concatenate the audio.
+
+    Edge TTS word/sentence boundary offsets are relative to each chunk's
+    stream start, so they are shifted by the accumulated narration duration
+    before feeding the shared SubMaker; the subtitle pipeline downstream
+    stays unchanged.
+    """
+    sentences = [
+        part.strip()
+        for part in utils.split_string_by_punctuations(text)
+        if part and part.strip()
+    ]
+    if not sentences:
+        return None
+    timeout_seconds = get_edge_tts_timeout_seconds()
+    temp_path = None
+    try:
+        ensure_file_path_exists(voice_file)
+        descriptor, temp_path = tempfile.mkstemp(
+            prefix=".edge-tts-chunked-",
+            suffix=os.path.splitext(voice_file)[1] or ".mp3",
+            dir=os.path.dirname(os.path.abspath(voice_file)),
+        )
+        sub_maker = edge_tts.SubMaker()
+        time_shift = 0  # edge-tts offsets are in 100-nanosecond units
+        audio_size = 0
+        with os.fdopen(descriptor, "wb") as file:
+            for index, sentence in enumerate(sentences, 1):
+                # split_string_by_punctuations срезает конечную пунктуацию, а
+                # Edge TTS отклоняет фразы без завершающего знака
+                # (NoAudioReceived) — возвращаем точку на место.
+                if not re.search(r"[.!?…]$", sentence):
+                    sentence = sentence + "."
+                chunk_audio = bytearray()
+                chunk_events = []
+                completed = False
+                last_error = ""
+                for attempt in range(6):
+                    if attempt:
+                        # Бесплатный endpoint Edge TTS отклоняет частые запросы
+                        # волнами; экспоненциальная пауза между попытками
+                        # выравнивает приём даже при сериях отказов.
+                        time.sleep(min(2**attempt, 20))
+                    chunk_audio.clear()
+                    chunk_events.clear()
+                    try:
+                        communicate = create_edge_tts_communicate(
+                            sentence, voice_name, rate_str
+                        )
+
+                        def _handle_chunk(chunk, _audio=chunk_audio, _events=chunk_events):
+                            chunk_type = chunk["type"]
+                            if chunk_type == "audio":
+                                _audio.extend(chunk["data"])
+                            elif chunk_type in ["WordBoundary", "SentenceBoundary"]:
+                                _events.append(chunk)
+
+                        stream_edge_tts_chunks(
+                            communicate, _handle_chunk, timeout_seconds=timeout_seconds
+                        )
+                        if chunk_audio and chunk_events:
+                            completed = True
+                            break
+                        last_error = "empty audio stream"
+                    except Exception as e:
+                        last_error = str(e)
+                        logger.warning(
+                            f"chunked tts sentence {index}/{len(sentences)} "
+                            f"attempt {attempt + 1} failed: {last_error}"
+                        )
+                if not completed:
+                    logger.error(
+                        f"chunked tts failed on sentence {index}/{len(sentences)}: "
+                        f"{last_error}"
+                    )
+                    return None
+                for event in chunk_events:
+                    shifted = dict(event)
+                    shifted["offset"] = event.get("offset", 0) + time_shift
+                    sub_maker.feed(shifted)
+                file.write(bytes(chunk_audio))
+                audio_size += len(chunk_audio)
+                last_end = max(
+                    (event.get("offset", 0) + event.get("duration", 0))
+                    for event in chunk_events
+                )
+                time_shift += last_end
+        if audio_size == 0 or not sub_maker.get_srt():
+            logger.error("chunked tts produced no usable audio or timing")
+            return None
+        os.replace(temp_path, voice_file)
+        temp_path = None
+        logger.info(
+            f"chunked tts completed: {len(sentences)} sentences, "
+            f"output file: {voice_file}"
+        )
+        return sub_maker
+    except Exception as e:
+        logger.error(f"chunked tts failed, error: {str(e)}")
+        return None
+    finally:
+        if temp_path is not None:
+            try:
+                os.remove(temp_path)
+            except OSError as remove_error:
+                logger.warning(
+                    "failed to remove temporary chunked Edge TTS audio: "
+                    f"{temp_path}, error: {remove_error}"
+                )
 
 
 def siliconflow_tts(
