@@ -25,6 +25,7 @@ from app.config import config
 from app.models.schema import ImageMotion, MaterialInfo, VideoAspect, VideoConcatMode
 from app.services import (
     codex_image,
+    gemini_image,
     generation_progress,
     infistar_video,
     jalapeno_video,
@@ -1906,6 +1907,69 @@ def generate_images_codex(
     return [item]
 
 
+def generate_images_gemini(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    save_dir: str = "",
+) -> List[MaterialInfo]:
+    """Generate one Gemini ("Nano Banana") image per script keyword.
+
+    Same signature and empty-list failure convention as
+    :func:`generate_images_openai`. Configuration errors (missing API key)
+    abort the whole task before any paid generation happens; per-image
+    failures skip the keyword and continue.
+    """
+    aspect = VideoAspect(video_aspect)
+    if minimum_duration <= 0:
+        return []
+    try:
+        if not gemini_image.api_key():
+            raise gemini_image.GeminiImageError(
+                "gemini_image_api_key_missing",
+                "set gemini_image_api_key or gemini_api_key in config.toml ([app] section)",
+            )
+        aspect_hint = (
+            "9:16"
+            if aspect == VideoAspect.portrait
+            else "16:9" if aspect == VideoAspect.landscape else "1:1"
+        )
+        prompt = (
+            f"Cinematic photo of {search_term}, photorealistic, high detail. "
+            f"Compose the image for a {aspect_hint} video frame."
+        )
+        generation_progress.submitting("gemini_image")
+        image_bytes = gemini_image.generate_image(prompt, aspect_hint=aspect_hint)
+    except gemini_image.GeminiImageError:
+        raise
+    except Exception as e:
+        logger.error(
+            f"gemini image generation failed unexpectedly: term={search_term!r}, "
+            f"error={type(e).__name__}, detail={e}"
+        )
+        return []
+    if image_bytes is None:
+        return []
+    try:
+        image_path, width, height = _save_openai_image_file(image_bytes, save_dir)
+    except _OpenAIImageDecodeError as e:
+        logger.error(
+            "gemini image response is not a decodable image, skipping term: "
+            f"term={search_term!r}, error={type(e).__name__}, detail={e}"
+        )
+        return []
+    item = MaterialInfo()
+    item.provider = "gemini_image"
+    item.url = image_path
+    item.duration = max(int(minimum_duration), 1)
+    item.source_info = {
+        "provider": "gemini_image",
+        "search_term": search_term,
+        "rendition": {"id": None, "width": width, "height": height},
+    }
+    return [item]
+
+
 def _render_openai_image_video(
     image_path: str, clip_duration: int, image_motion: ImageMotion = ImageMotion.zoom
 ) -> str:
@@ -2473,7 +2537,7 @@ def download_videos(
             max_clip_duration=max_clip_duration,
             material_directory=material_directory,
         )
-    if source in {"openai_image", "codex_image"}:
+    if source in {"openai_image", "codex_image", "gemini_image"}:
         # 与 WaveSpeed 相同的按需付费语义：文生图按张计费，逐段生成、凑够
         # 所需时长立即停止。生成结果是一次性的本地图片文件，也不参与 24
         # 小时搜索缓存——缓存会让不同任务反复拿到同一张图。
@@ -2483,6 +2547,11 @@ def download_videos(
                 "image_generator": generate_images_codex,
                 "provider": source,
                 "codex_image_context": codex_image_context,
+            }
+        elif source == "gemini_image":
+            image_options = {
+                "image_generator": generate_images_gemini,
+                "provider": source,
             }
         return _download_videos_openai_image_on_demand(
             task_id=task_id,

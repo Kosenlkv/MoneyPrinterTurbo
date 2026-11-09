@@ -21,6 +21,7 @@ from app.services import (
     codex_image,
     codex_oauth,
     elevenlabs_music,
+    gemini_image,
     generation_progress,
     infistar_video,
     jalapeno_video,
@@ -102,7 +103,7 @@ _VIDEO_MUSIC_PROVIDERS = {
 _SUPPORTED_VIDEO_SOURCES = frozenset({
     "pexels", "pixabay", "coverr", "local", "wavespeed",
     "volcengine_seedance", "ofox", "metaso_minimax", "muapi",
-    "loomloom", "openai_image", "codex_image", "infistar", "jalapeno",
+    "loomloom", "openai_image", "codex_image", "gemini_image", "infistar", "jalapeno",
 })
 
 
@@ -1674,6 +1675,21 @@ def _run_pipeline(
             "OpenAI image source requires openai_image_base_url and "
             "openai_image_model in config.toml (openai_image_api_keys is "
             "optional for local gateways that need no auth)",
+        )
+
+    if (
+        stop_at in {"materials", "video"}
+        and params.video_source == "gemini_image"
+        and not gemini_image.is_enabled(
+            config.snapshot_config_with_pending(config.app)
+        )
+    ):
+        return _mark_task_failed(
+            task_id,
+            "preflight",
+            "Gemini image source requires gemini_image_api_key or "
+            "gemini_api_key in config.toml ([app] section); get a key at "
+            "https://aistudio.google.com/apikey",
         )
 
     # 只有完整成片流程需要视频配乐供应商。尽早阻止缺少 Key 的完整任务，避免

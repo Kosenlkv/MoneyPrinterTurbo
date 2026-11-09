@@ -49,6 +49,7 @@ from app.services import bgm as bgm_service
 from app.services import material_upload as material_upload_service
 from app.services import (
     cache_manager,
+    gemini_image,
     llm,
     loomloom,
     material,
@@ -57,6 +58,7 @@ from app.services import (
     infistar_video,
     jalapeno_video,
     ofox,
+    reference_style,
     subtitle,
     video,
     volcengine_seedance,
@@ -145,7 +147,7 @@ VIDEO_SOURCE_GROUPS = {
         "wavespeed",
         "muapi",
     ),
-    "ai_image": ("openai_image", "codex_image"),
+    "ai_image": ("openai_image", "codex_image", "gemini_image"),
     "local": ("local",),
 }
 # Upload-Post 的 API Key 与发布用户分别在两个页面管理，并且发布用户名称
@@ -3419,6 +3421,7 @@ def _material_provider_labels():
         "muapi": tr("MuAPI AI Video"),
         "openai_image": tr("OpenAI Compatible Text-to-Image"),
         "codex_image": tr("codex.image.label"),
+        "gemini_image": tr("Gemini Image (Nano Banana)"),
         "local": tr("Local file"),
     }
 
@@ -4198,6 +4201,59 @@ def _render_material_provider_settings(provider):
                 "openai_image_prompt_template",
                 openai_image_prompt_template.strip(),
             )
+    elif provider == "gemini_image":
+        st.markdown(f"**{tr('Gemini Image (Nano Banana)')}**")
+
+        gemini_api_key = st.text_input(
+            tr("Gemini API Key"),
+            value=str(app_settings.get("gemini_image_api_key", "") or ""),
+            type="password",
+            help=tr("Gemini API Key Help"),
+            key="gemini_image_api_key_input",
+            on_change=_save_settings_change,
+            args=(
+                "app",
+                "gemini_image_api_key",
+                "gemini_image_api_key_input",
+                lambda value: value.strip(),
+            ),
+        )
+        _set_runtime_config("app", "gemini_image_api_key", gemini_api_key.strip())
+
+        gemini_image_model = st.text_input(
+            tr("Gemini Image Model"),
+            value=str(app_settings.get("gemini_image_model", "") or ""),
+            placeholder="gemini-2.5-flash-image",
+            key="gemini_image_model_input",
+            on_change=_save_settings_change,
+            args=(
+                "app",
+                "gemini_image_model",
+                "gemini_image_model_input",
+                lambda value: value.strip(),
+            ),
+        )
+        _set_runtime_config(
+            "app", "gemini_image_model", gemini_image_model.strip()
+        )
+
+        with st.expander(tr("Gemini Image Advanced Settings"), expanded=False):
+            gemini_base_url = st.text_input(
+                tr("Gemini Base URL"),
+                value=str(app_settings.get("gemini_image_base_url", "") or ""),
+                placeholder="https://generativelanguage.googleapis.com",
+                help=tr("Gemini Base URL Help"),
+                key="gemini_image_base_url_input",
+                on_change=_save_settings_change,
+                args=(
+                    "app",
+                    "gemini_image_base_url",
+                    "gemini_image_base_url_input",
+                    lambda value: value.strip(),
+                ),
+            )
+            _set_runtime_config("app", "gemini_image_base_url", gemini_base_url.strip())
+        st.caption(tr("Gemini Image Configuration Example"))
 
 
 @st.dialog(
@@ -6000,6 +6056,117 @@ def _render_niche_scout(params):
                             st.rerun(scope="app")
 
 
+def _render_reference_style_controls(params):
+    """Reference video upload + style analysis.
+
+    The analyzed profile is persisted by ``reference_style``; the
+    ``use_reference_style`` checkbox gates prompt injection and clip
+    duration pacing in the downstream render code.
+    """
+    with st.container(key="reference_style_section"):
+        with st.expander(tr("Reference Style Expander"), expanded=False):
+            st.caption(tr("Reference Style Help"))
+            uploaded = st.file_uploader(
+                tr("Reference Video Upload"),
+                type=["mp4", "mov", "webm", "mkv"],
+                key="reference_video_upload",
+            )
+            if uploaded is not None and (
+                st.session_state.get("reference_video_name") != uploaded.name
+                or not st.session_state.get("reference_video_path")
+            ):
+                try:
+                    path = reference_style.save_uploaded_reference(
+                        uploaded.name, uploaded.getvalue()
+                    )
+                    st.session_state["reference_video_name"] = uploaded.name
+                    st.session_state["reference_video_path"] = path
+                    st.session_state.pop("reference_profile_cache", None)
+                except (OSError, ValueError) as e:
+                    logger.error(f"failed to store reference upload: {e}")
+                    st.error(tr("Reference Upload Failed"))
+
+            ref_path = st.session_state.get("reference_video_path")
+            analyze_col, clear_col = st.columns(2)
+            if analyze_col.button(
+                tr("Analyze Reference Style"),
+                key="analyze_reference_style",
+                disabled=not ref_path,
+                use_container_width=True,
+            ):
+                progress_bar = st.progress(
+                    0.0, text=tr("Reference Analyzing")
+                )
+
+                def _progress(stage, done, total):
+                    progress_bar.progress(
+                        done / max(total, 1),
+                        text=tr(f"Reference Stage {stage}"),
+                    )
+
+                try:
+                    reference_style.analyze_reference(
+                        ref_path,
+                        language=params.video_language or "",
+                        progress=_progress,
+                    )
+                    st.session_state["use_reference_style"] = True
+                    st.success(tr("Reference Analysis Done"))
+                except Exception as e:
+                    logger.error(f"reference analysis failed: {e}")
+                    st.error(tr("Reference Analysis Failed"))
+                finally:
+                    progress_bar.empty()
+            if clear_col.button(
+                tr("Clear Reference"),
+                key="clear_reference_style",
+                use_container_width=True,
+            ):
+                reference_style.clear_profile()
+                for key in (
+                    "reference_video_name",
+                    "reference_video_path",
+                    "use_reference_style",
+                ):
+                    st.session_state.pop(key, None)
+                st.rerun()
+
+            profile = reference_style.load_profile()
+            if not profile:
+                return
+            cols = st.columns(4)
+            cols[0].metric(tr("Reference Duration"), f"{profile.get('duration_sec', 0)}s")
+            cols[1].metric(tr("Reference Avg Shot"), f"{profile.get('avg_shot_sec', 0)}s")
+            cols[2].metric(tr("Reference Cuts Per Min"), profile.get("shots_per_min", 0))
+            cols[3].metric(tr("Reference Speech Rate"), profile.get("words_per_sec", 0))
+            palette = profile.get("palette") or []
+            if palette:
+                chips = " ".join(
+                    "<span style='display:inline-block;width:16px;height:16px;"
+                    f"border-radius:4px;background:{color};margin-right:3px;"
+                    "vertical-align:middle'></span>"
+                    for color in palette
+                )
+                st.markdown(
+                    f"{tr('Reference Palette')}: {chips} `{'`, `'.join(palette)}`",
+                    unsafe_allow_html=True,
+                )
+            if profile.get("look"):
+                st.caption(f"{tr('Reference Look')}: {profile['look']}")
+            if profile.get("style_summary"):
+                st.markdown(profile["style_summary"])
+            if profile.get("hook"):
+                st.caption(f"{tr('Reference Hook')}: «{profile['hook']}»")
+            st.checkbox(
+                tr("Use Reference Style"),
+                key="use_reference_style",
+                help=tr("Use Reference Style Help"),
+            )
+            suggested = reference_style.suggested_clip_duration(profile)
+            if st.session_state.get("use_reference_style") and suggested:
+                st.caption(tr("Reference Pacing Applied").format(seconds=suggested))
+
+
 def _render_script_settings(panel, params):
     """渲染文案设置并更新生成参数。"""
     with panel:
@@ -6058,6 +6225,8 @@ def _render_script_settings(panel, params):
             )
             params.video_language = selected_language_code
             _set_runtime_config("ui", "video_language", params.video_language)
+
+            _render_reference_style_controls(params)
 
             # 使用带 key 的局部容器限定折叠入口样式，保持 expander 的原生交互，
             # 同时避免样式误伤页面顶部的“基础设置”等其他折叠区域。
@@ -6133,6 +6302,16 @@ def _render_script_settings(panel, params):
                     _set_runtime_config(
                         "ui", "video_script_prompt", params.video_script_prompt
                     )
+                    # 参考风格只注入任务参数，不回写已保存的自定义要求原文。
+                    if st.session_state.get("use_reference_style"):
+                        _ref_style_prompt = reference_style.build_style_prompt(
+                            reference_style.load_profile() or {}
+                        )
+                        if _ref_style_prompt:
+                            params.video_script_prompt = (
+                                f"{params.video_script_prompt}\n\n"
+                                f"{_ref_style_prompt}"
+                            ).strip()
 
                     system_prompt = st.text_area(
                         tr("Custom System Prompt"),
@@ -6441,7 +6620,7 @@ def _render_video_settings(panel, params):
                 "ui", "video_fit_mode", params.video_fit_mode.value
             )
 
-            if params.video_source in {"local", "openai_image", "codex_image"}:
+            if params.video_source in {"local", "openai_image", "codex_image", "gemini_image"}:
                 image_motion_labels = {
                     ImageMotion.static.value: tr("Static Image"),
                     ImageMotion.zoom.value: tr("Slow Zoom"),
@@ -6501,6 +6680,13 @@ def _render_video_settings(panel, params):
             _set_runtime_config(
                 "ui", "video_clip_duration", params.video_clip_duration
             )
+            # 勾选“参考风格”后，剪辑节奏跟随参考视频的平均镜头长度。
+            if st.session_state.get("use_reference_style"):
+                _ref_clip = reference_style.suggested_clip_duration(
+                    reference_style.load_profile() or {}
+                )
+                if _ref_clip:
+                    params.video_clip_duration = _ref_clip
             clip_speed_key = localized_widget_key("video_clip_speed_slider")
             # session_state 可能来自旧任务、API 参数或旧版页面状态。控件创建前
             # 统一归一化，既保留合法选择，也确保 slider 始终收到 0.5～2.0
@@ -9412,6 +9598,13 @@ def _render_generation_controls(
         ):
             _remove_active_generation_task(task_id)
             st.error(tr("Please Configure the OpenAI Image Source"))
+            st.stop()
+
+        if params.video_source == "gemini_image" and not gemini_image.is_enabled(
+            config.snapshot_config_with_pending(config.app)
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Please Configure the Gemini Image Source"))
             st.stop()
 
         loomloom_video_request = None
