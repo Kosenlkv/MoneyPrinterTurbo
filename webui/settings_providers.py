@@ -18,6 +18,7 @@ from app.services import (
     metaso_minimax,
     muapi,
     ofox,
+    pollinations_image,
     puter_image,
     volcengine_seedance,
 )
@@ -106,6 +107,7 @@ def configured_material_providers(settings, groups, codex_connected=False):
             "openai_image": material.is_openai_image_enabled(settings),
             "gemini_image": gemini_image.is_enabled(settings),
             "puter_image": puter_image.is_enabled(settings),
+            "pollinations_image": pollinations_image.is_enabled(settings),
             "codex_image": bool(
                 codex_connected and _text(settings.get("codex_image_model_name"))
             ),

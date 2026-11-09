@@ -58,6 +58,7 @@ from app.services import (
     infistar_video,
     jalapeno_video,
     ofox,
+    pollinations_image,
     puter_image,
     reference_style,
     subtitle,
@@ -148,7 +149,7 @@ VIDEO_SOURCE_GROUPS = {
         "wavespeed",
         "muapi",
     ),
-    "ai_image": ("openai_image", "codex_image", "gemini_image", "puter_image"),
+    "ai_image": ("openai_image", "codex_image", "gemini_image", "puter_image", "pollinations_image"),
     "local": ("local",),
 }
 # Upload-Post 的 API Key 与发布用户分别在两个页面管理，并且发布用户名称
@@ -3424,6 +3425,7 @@ def _material_provider_labels():
         "codex_image": tr("codex.image.label"),
         "gemini_image": tr("Gemini Image (Nano Banana)"),
         "puter_image": tr("Puter Image (Nano Banana)"),
+        "pollinations_image": tr("Pollinations Image (Free)"),
         "local": tr("Local file"),
     }
 
@@ -4309,6 +4311,42 @@ def _render_material_provider_settings(provider):
             )
             _set_runtime_config("app", "puter_base_url", puter_base_url.strip())
         st.caption(tr("Puter Image Configuration Example"))
+    elif provider == "pollinations_image":
+        st.markdown(f"**{tr('Pollinations Image (Free)')}**")
+        st.caption(tr("Pollinations Image Configuration Example"))
+
+        pollinations_api_key = st.text_input(
+            tr("Pollinations Token"),
+            value=str(app_settings.get("pollinations_api_key", "") or ""),
+            type="password",
+            help=tr("Pollinations Token Help"),
+            key="pollinations_api_key_input",
+            on_change=_save_settings_change,
+            args=(
+                "app",
+                "pollinations_api_key",
+                "pollinations_api_key_input",
+                lambda value: value.strip(),
+            ),
+        )
+        _set_runtime_config("app", "pollinations_api_key", pollinations_api_key.strip())
+
+        pollinations_image_model = st.text_input(
+            tr("Pollinations Image Model"),
+            value=str(app_settings.get("pollinations_image_model", "") or ""),
+            placeholder="flux",
+            key="pollinations_image_model_input",
+            on_change=_save_settings_change,
+            args=(
+                "app",
+                "pollinations_image_model",
+                "pollinations_image_model_input",
+                lambda value: value.strip(),
+            ),
+        )
+        _set_runtime_config(
+            "app", "pollinations_image_model", pollinations_image_model.strip()
+        )
 
 
 @st.dialog(
@@ -6675,7 +6713,7 @@ def _render_video_settings(panel, params):
                 "ui", "video_fit_mode", params.video_fit_mode.value
             )
 
-            if params.video_source in {"local", "openai_image", "codex_image", "gemini_image", "puter_image"}:
+            if params.video_source in {"local", "openai_image", "codex_image", "gemini_image", "puter_image", "pollinations_image"}:
                 image_motion_labels = {
                     ImageMotion.static.value: tr("Static Image"),
                     ImageMotion.zoom.value: tr("Slow Zoom"),
