@@ -259,9 +259,10 @@ puter_base_url = ""
 puter_image_model = ""
 
 # Pollinations.ai image generation — completely free, no API key required.
-# Anonymous use is rate-limited (~1 request per 15 s) and adds a logo;
-# a free token from https://auth.pollinations.ai raises limits and removes
-# the logo. Leave everything empty for anonymous use.
+# Anonymous use is rate-limited (1 image per 45 s per IP; the generator
+# waits out the pacing window automatically) and adds a logo; a free token
+# from https://auth.pollinations.ai lifts the pacing and removes the logo.
+# Leave everything empty for anonymous use.
 pollinations_api_key = ""
 # Leave empty to use https://image.pollinations.ai. Kept separate from the
 # LLM provider's pollinations_base_url (which points at text.pollinations.ai).

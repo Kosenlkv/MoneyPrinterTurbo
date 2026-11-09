@@ -812,7 +812,7 @@
     "Pollinations Token": "Pollinations 令牌（可选，[获取](https://auth.pollinations.ai)）",
     "Pollinations Token Help": "留空则为匿名免费使用（有速率限制和 logo）。免费账户令牌可提高限额并去除 logo。",
     "Pollinations Image Model": "Pollinations 图像模型",
-    "Pollinations Image Configuration Example": "完全免费，无需 API 密钥。默认模型：flux。匿名使用有速率限制（约每 15 秒 1 次），批量生成比付费源慢。",
+    "Pollinations Image Configuration Example": "完全免费，无需 API 密钥。默认模型：flux。匿名使用限速为每 IP 每 45 秒 1 张（生成器会自动等待限速窗口），批量生成比付费源慢。",
     "Reference Style Expander": "参考风格（复刻竞品）",
     "Reference YouTube URL": "YouTube 参考视频链接",
     "Reference YouTube Download": "下载",

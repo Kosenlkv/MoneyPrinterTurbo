@@ -555,7 +555,7 @@
     "Pollinations Token": "Токен Pollinations (необязательно, [получить](https://auth.pollinations.ai))",
     "Pollinations Token Help": "Оставьте пустым для анонимного бесплатного использования (с лимитами и логотипом). Бесплатный токен аккаунта повышает лимиты и убирает логотип.",
     "Pollinations Image Model": "Модель Pollinations Image",
-    "Pollinations Image Configuration Example": "Полностью бесплатно, API-ключ не нужен. Модель по умолчанию: flux. Анонимные запросы ограничены (~1 запрос / 15 с), поэтому пакетная генерация идёт медленнее платных источников.",
+    "Pollinations Image Configuration Example": "Полностью бесплатно, API-ключ не нужен. Модель по умолчанию: flux. Анонимно — 1 картинка / 45 с с IP (генератор сам выжидает паузу), поэтому пакет идёт медленнее платных источников.",
     "Reference Style Expander": "Стиль по референсу (копия конкурента)",
     "Reference YouTube URL": "Ссылка на YouTube-референс",
     "Reference YouTube Download": "Скачать",

@@ -812,7 +812,7 @@
     "Pollinations Token": "Pollinations token (optional, [get one](https://auth.pollinations.ai))",
     "Pollinations Token Help": "Leave empty for anonymous free use (rate-limited, with logo). A free account token raises the limits and removes the logo.",
     "Pollinations Image Model": "Pollinations Image Model",
-    "Pollinations Image Configuration Example": "Completely free, no API key required. Default model: flux. Anonymous use is rate-limited (~1 request per 15 s), so batches take longer than paid sources.",
+    "Pollinations Image Configuration Example": "Completely free, no API key required. Default model: flux. Anonymous use is rate-limited (1 image per 45 s per IP) — the generator waits out the pacing automatically, so batches take ~45 s per image longer than paid sources.",
     "Reference Style Expander": "Reference style (copy a competitor)",
     "Reference YouTube URL": "YouTube reference URL",
     "Reference YouTube Download": "Download",

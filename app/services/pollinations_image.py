@@ -32,9 +32,13 @@ DEFAULT_BASE_URL = "https://image.pollinations.ai"
 DEFAULT_MODEL = "flux"
 REQUEST_TIMEOUT = (30, 300)
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+# Anonymous usage is rate-limited to 1 image per 45 seconds per IP; the API
+# answers 402 FREE_LIMIT with an explicit "Retry after Ns". Treat it as a
+# slow lane, not a failure: wait out the window and retry.
+FREE_LIMIT_STATUS = 402
+FREE_LIMIT_SLEEP_SECONDS = 50
+FREE_LIMIT_MAX_ATTEMPTS = 10
 MAX_ATTEMPTS = 4
-# Anonymous usage is rate-limited; retrying too eagerly only extends the
-# queue. These sleeps keep a whole-video batch inside the anonymous budget.
 RETRY_SLEEP_SECONDS = 20
 
 
@@ -103,13 +107,20 @@ def generate_image(prompt: str, *, aspect_hint: str = "") -> Optional[bytes]:
         params["token"] = key
 
     last_detail = ""
-    for attempt in range(MAX_ATTEMPTS):
+    # A registered token lifts the free-IP pacing, so 402 retries only make
+    # sense for anonymous calls; with a token a 402 is a real rejection.
+    free_limit_attempts = 0 if api_key() else FREE_LIMIT_MAX_ATTEMPTS
+    attempts_left = MAX_ATTEMPTS
+    while attempts_left > 0 or free_limit_attempts > 0:
+        attempt_kind = "request"
         try:
             response = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
         except requests.RequestException as e:
             last_detail = f"network error: {e}"
+            attempts_left -= 1
             logger.warning(
-                f"pollinations image request failed (attempt {attempt + 1}): {e}"
+                f"pollinations image request failed "
+                f"({attempts_left} retries left): {e}"
             )
             time.sleep(RETRY_SLEEP_SECONDS)
             continue
@@ -120,12 +131,26 @@ def generate_image(prompt: str, *, aspect_hint: str = "") -> Optional[bytes]:
             return response.content
 
         last_detail = f"HTTP {status}: {response.text[:300]}"
+        if status == FREE_LIMIT_STATUS and "FREE_LIMIT" in response.text:
+            if free_limit_attempts <= 0:
+                break
+            free_limit_attempts -= 1
+            attempt_kind = f"free-limit wait #{FREE_LIMIT_MAX_ATTEMPTS - free_limit_attempts}"
+            logger.info(
+                f"pollinations free tier pacing (1 image / 45 s per IP); "
+                f"retry {FREE_LIMIT_MAX_ATTEMPTS - free_limit_attempts}/"
+                f"{FREE_LIMIT_MAX_ATTEMPTS} after {FREE_LIMIT_SLEEP_SECONDS}s"
+            )
+            time.sleep(FREE_LIMIT_SLEEP_SECONDS)
+            continue
+
         logger.warning(
-            f"pollinations image generation failed (attempt {attempt + 1}): "
-            f"{last_detail}"
+            f"pollinations image generation failed: {last_detail}"
         )
         if status not in RETRYABLE_STATUS_CODES:
             break
+        attempts_left -= 1
+        logger.info(f"retrying ({attempts_left} retries left, {attempt_kind})")
         time.sleep(RETRY_SLEEP_SECONDS)
 
     if last_detail:
