@@ -164,7 +164,8 @@ class VideoParams(BaseModel):
     stroke_color: Optional[str] = "#000000"
     stroke_width: float = Field(default=1.5, ge=0, allow_inf_nan=False)
     n_threads: Optional[int] = 2
-    paragraph_number: int = Field(default=1, ge=1, le=10)
+    paragraph_number: int = Field(default=1, ge=1, le=20)
+    long_video_mode: bool = False  # Chapter-based long-form script generation
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
 
@@ -221,7 +222,8 @@ class VideoScriptParams:
 
     video_subject: Optional[str] = "春天的花海"
     video_language: Optional[str] = ""
-    paragraph_number: int = Field(default=1, ge=1, le=10)
+    paragraph_number: int = Field(default=1, ge=1, le=20)
+    long_video_mode: bool = False  # Chapter-based long-form script generation
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
 
@@ -229,7 +231,7 @@ class VideoScriptParams:
 class VideoTermsParams:
     """
     {
-      "video_subject": "",
+      "video_subject": "春天的花海",
       "video_script": "",
       "amount": 5,
       "match_materials_to_script": false
@@ -264,7 +266,7 @@ class TaskVideoRequest(VideoParams, BaseModel):
     # Bound API resource requests while leaving the CLI's explicit batch and
     # FFmpeg thread controls in VideoParams unchanged.
     video_count: int = Field(default=1, ge=1, le=5)
-    video_clip_duration: int = Field(default=5, ge=1, le=15)
+    video_clip_duration: int = Field(default=5, ge=1, le=60)
     n_threads: Optional[int] = Field(default=2, ge=1, le=16)
 
 
