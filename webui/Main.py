@@ -1563,6 +1563,9 @@ def _apply_restored_params(params):
         "script_language_select", params.get("video_language") or ""
     )
     st.session_state["paragraph_number_input"] = params.get("paragraph_number", 1)
+    st.session_state["long_video_mode_input"] = bool(
+        params.get("long_video_mode", False)
+    )
     st.session_state["video_script_prompt"] = params.get("video_script_prompt") or ""
     st.session_state["custom_system_prompt"] = (
         params.get("custom_system_prompt") or llm.DEFAULT_SCRIPT_SYSTEM_PROMPT
@@ -5914,10 +5917,37 @@ def _render_script_settings(panel, params):
                         "app", "script_generation_backend", script_generation_backend
                     )
 
+                    params.long_video_mode = st.checkbox(
+                        tr("Long Video Mode"),
+                        value=bool(
+                            st.session_state.get("long_video_mode_input", False)
+                        ),
+                        key="long_video_mode_input",
+                        help=tr("Long Video Mode Help"),
+                    )
+                    _set_runtime_config(
+                        "ui", "long_video_mode", params.long_video_mode
+                    )
+                    # 长视频模式下 paragraph_number 表示章节数；切换模式时先把
+                    # 已保存的值钳制到新范围内，避免 slider 收到越界的默认值。
+                    _max_paragraph_number = (
+                        llm.LONG_SCRIPT_MAX_CHAPTERS
+                        if params.long_video_mode
+                        else llm.MAX_SCRIPT_PARAGRAPH_NUMBER
+                    )
+                    _saved_paragraph_number = int(
+                        st.session_state.get("paragraph_number_input", 1) or 1
+                    )
+                    st.session_state["paragraph_number_input"] = max(
+                        llm.MIN_SCRIPT_PARAGRAPH_NUMBER,
+                        min(_saved_paragraph_number, _max_paragraph_number),
+                    )
                     params.paragraph_number = st.slider(
-                        tr("Script Paragraph Number"),
+                        tr("Script Chapter Number")
+                        if params.long_video_mode
+                        else tr("Script Paragraph Number"),
                         min_value=llm.MIN_SCRIPT_PARAGRAPH_NUMBER,
-                        max_value=llm.MAX_SCRIPT_PARAGRAPH_NUMBER,
+                        max_value=_max_paragraph_number,
                         key="paragraph_number_input",
                     )
                     _set_runtime_config(
@@ -6283,7 +6313,8 @@ def _render_video_settings(panel, params):
                     )
                 )
             else:
-                video_clip_durations = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+                # 长视频素材可以更从容：补充 15/20/30 秒选项，减少长片的拼接次数。
+                video_clip_durations = [2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 30]
             params.video_clip_duration = stable_selectbox(
                 tr("Clip Duration"),
                 options=video_clip_durations,
