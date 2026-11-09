@@ -5832,6 +5832,174 @@ def _render_loomloom_script_generation(params):
     _render_loomloom_candidates()
 
 
+def _render_niche_scout(params):
+    """YouTube niche scout: find rising videos from small channels and let the
+    user adopt a found title as the video subject."""
+    # yt-dlp подключается лениво внутри сервиса, поэтому импорт здесь безопасен
+    # для времени старта страницы.
+    from app.services import niche_finder
+
+    pending_subject = st.session_state.pop("niche_apply_subject", None)
+    if pending_subject:
+        # Применяется до создания виджета video_subject в этом же запуске.
+        st.session_state["video_subject"] = pending_subject
+
+    with st.container(key="niche_scout"):
+        with st.expander(tr("YouTube Niche Scout"), expanded=False):
+            st.caption(tr("YouTube Niche Scout Help"))
+            niche_topic = st.text_input(
+                tr("Niche Scout Topic"),
+                value=params.video_subject or "",
+                key="niche_scout_topic",
+            )
+            queries = st.session_state.get("niche_scout_queries", [])
+            tools_cols = st.columns(2, gap="small")
+            if tools_cols[0].button(
+                tr("Suggest Queries"),
+                key="niche_scout_suggest",
+                use_container_width=True,
+                help=tr("Suggest Queries Help"),
+            ):
+                with st.spinner(tr("Suggesting Queries")):
+                    st.session_state["niche_scout_queries"] = (
+                        niche_finder.suggest_queries(
+                            topic=niche_topic or params.video_subject or "interesting facts",
+                            language=st.session_state.get("ui_language", "ru"),
+                            count=5,
+                        )
+                    )
+                st.rerun(scope="app")
+            queries = st.session_state.get("niche_scout_queries", [])
+            if not queries and niche_topic:
+                queries = [niche_topic]
+            queries_text = st.text_area(
+                tr("Niche Scout Queries"),
+                value="\n".join(queries),
+                height=96,
+                key="niche_scout_queries_text",
+                help=tr("Niche Scout Queries Help"),
+            )
+            filter_cols = st.columns(3, gap="small")
+            max_age = filter_cols[0].number_input(
+                tr("Max Video Age Days"),
+                min_value=1,
+                max_value=365,
+                value=31,
+                step=1,
+                key="niche_scout_days",
+            )
+            max_subs = filter_cols[1].number_input(
+                tr("Max Channel Subscribers"),
+                min_value=0,
+                max_value=10_000_000,
+                value=100_000,
+                step=10_000,
+                key="niche_scout_max_subs",
+            )
+            min_views = filter_cols[2].number_input(
+                tr("Min Video Views"),
+                min_value=0,
+                max_value=10_000_000,
+                value=1_000,
+                step=1_000,
+                key="niche_scout_min_views",
+            )
+            if tools_cols[1].button(
+                tr("Scan Niches"),
+                key="niche_scout_scan",
+                use_container_width=True,
+                type="primary",
+            ):
+                query_list = [
+                    line.strip()
+                    for line in queries_text.splitlines()
+                    if line.strip()
+                ]
+                if not query_list and niche_topic:
+                    # Пустой список запросов трактуем как «искать по самой теме».
+                    query_list = [niche_topic.strip()]
+                if not query_list:
+                    st.warning(tr("Niche Scout Need Queries"))
+                else:
+                    progress_text = st.empty()
+
+                    def _progress(stage, done, total, label):
+                        progress_text.caption(
+                            tr("Niche Scout Progress").format(
+                                done=done, total=total
+                            )
+                        )
+
+                    with st.spinner(tr("Scanning Niches")):
+                        result = niche_finder.find_rising_videos(
+                            queries=query_list,
+                            days=int(max_age),
+                            max_subscribers=int(max_subs),
+                            min_views=int(min_views),
+                            per_query=10,
+                            progress_callback=_progress,
+                        )
+                    progress_text.empty()
+                    st.session_state["niche_scout_result"] = result
+                    st.session_state["niche_scout_selected"] = None
+                    st.rerun(scope="app")
+
+            result = st.session_state.get("niche_scout_result")
+            if result:
+                videos = result.get("videos") or []
+                st.caption(
+                    tr("Niche Scout Summary").format(
+                        scanned=result.get("scanned", 0),
+                        found=len(videos),
+                        elapsed=result.get("elapsed_sec", 0),
+                    )
+                )
+                if not videos:
+                    st.info(tr("Niche Scout Empty"))
+                else:
+                    rows = []
+                    for v in videos:
+                        rows.append(
+                            {
+                                tr("Niche Col Title"): v["title"],
+                                tr("Niche Col Views"): v["views"],
+                                tr("Niche Col Subs"): v["subscribers"],
+                                tr("Niche Col Age"): v["age_days"],
+                                tr("Niche Col Score"): v["score"],
+                                tr("Niche Col Link"): v["url"],
+                            }
+                        )
+                    selection = st.dataframe(
+                        rows,
+                        key="niche_scout_table",
+                        hide_index=True,
+                        use_container_width=True,
+                        on_select="rerun",
+                        selection_mode="single-row",
+                        column_config={
+                            tr("Niche Col Link"): st.column_config.LinkColumn(
+                                tr("Niche Col Link"), display_text="▶"
+                            ),
+                        },
+                    )
+                    selected_rows = (
+                        selection.selection.rows
+                        if selection and selection.selection
+                        else []
+                    )
+                    if selected_rows:
+                        chosen = videos[selected_rows[0]]
+                        if st.button(
+                            tr("Use Selected As Subject"),
+                            key="niche_scout_apply",
+                            use_container_width=True,
+                        ):
+                            st.session_state["niche_apply_subject"] = chosen[
+                                "title"
+                            ]
+                            st.rerun(scope="app")
+
+
 def _render_script_settings(panel, params):
     """渲染文案设置并更新生成参数。"""
     with panel:
@@ -5866,6 +6034,8 @@ def _render_script_settings(panel, params):
                     key="video_subject",
                     label_visibility="collapsed",
                 ).strip()
+
+            _render_niche_scout(params)
 
             video_languages = [
                 (tr("Auto Detect"), ""),
