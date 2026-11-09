@@ -22,6 +22,13 @@ from app.utils.request_logging import trace_sdk_call
 _max_retries = 5
 MIN_SCRIPT_PARAGRAPH_NUMBER = 1
 MAX_SCRIPT_PARAGRAPH_NUMBER = 10
+# 长视频模式：脚本按“章节”逐段生成，最后合并为一个完整文案。
+# 长视频模式下 paragraph_number 表示章节数而不是单次生成的段落数。
+LONG_SCRIPT_MIN_CHAPTERS = 2
+LONG_SCRIPT_MAX_CHAPTERS = 20
+# 每个章节的目标字数。按常见语速换算，220 词约等于 1.5 分钟配音，
+# 因此 20 个章节大约可支撑 30 分钟左右的长视频。
+LONG_SCRIPT_CHAPTER_TARGET_WORDS = 220
 MAX_SCRIPT_PROMPT_LENGTH = 2000
 MAX_SCRIPT_SYSTEM_PROMPT_LENGTH = 8000
 # “测试模型链接”只发送一条极小请求。OpenAI SDK 默认 600 秒超时并自动重试
@@ -908,6 +915,182 @@ def build_script_prompt(
     return prompt
 
 
+def _format_script_response(response: str) -> str:
+    """Clean an LLM script response and normalize paragraph separation.
+
+    Shared by single-pass script generation and long-form chapter generation
+    so both paths produce the same narration-ready plain text.
+    """
+    # Remove emphasis and heading markers without changing inline names
+    # or musical notes such as C#, F# and G#.
+    response = response.replace("*", "")
+    response = re.sub(
+        r"(?m)^[ \t]{0,3}#{1,6}[ \t]+(.*?)[ \t]*$",
+        lambda match: re.sub(r"[ \t]+#+[ \t]*$", "", match.group(1)),
+        response,
+    )
+
+    # Link labels are narration; discard destinations before stripping
+    # bracketed stage directions. Common parenthesized URL components fit.
+    response = re.sub(
+        r"\[([^\]\n]+)\]\((?:[^()\n]|\([^()\n]*\))*\)",
+        lambda match: match.group(1),
+        response,
+    )
+
+    # Remove markdown syntax.  Use non-greedy .*? so each bracket/paren
+    # group is removed independently; the greedy form would eat all text
+    # between the first opener and the last closer on the same line.
+    response = re.sub(r"\[.*?\]", "", response)
+    response = re.sub(r"\(.*?\)", "", response)
+
+    # Split the script into paragraphs and re-join them.
+    paragraphs = response.split("\n\n")
+    return "\n\n".join(paragraphs)
+
+
+def _normalize_long_script_chapters(chapter_number: int | None) -> int:
+    try:
+        value = int(chapter_number or LONG_SCRIPT_MIN_CHAPTERS)
+    except (TypeError, ValueError):
+        value = LONG_SCRIPT_MIN_CHAPTERS
+
+    if value < LONG_SCRIPT_MIN_CHAPTERS or value > LONG_SCRIPT_MAX_CHAPTERS:
+        logger.warning(
+            f"long script chapter number is out of range and will be clamped: {value}"
+        )
+        return max(LONG_SCRIPT_MIN_CHAPTERS, min(value, LONG_SCRIPT_MAX_CHAPTERS))
+
+    return value
+
+
+def generate_long_script(
+    video_subject: str,
+    language: str = "",
+    chapter_number: int = 5,
+    video_script_prompt: str = "",
+    custom_system_prompt: str = "",
+    app_config=None,
+) -> str:
+    """Generate a long-form video script chapter by chapter.
+
+    A single LLM call cannot reliably produce a coherent 10+ minute script,
+    so the script is planned as an outline and each chapter is written with
+    the full outline and the previous chapter's ending as context. Chapters
+    are joined with blank lines, matching the paragraph format the rest of
+    the pipeline expects.
+    """
+    chapter_number = _normalize_long_script_chapters(chapter_number)
+    video_script_prompt = _limit_script_text(
+        video_script_prompt, MAX_SCRIPT_PROMPT_LENGTH, "video_script_prompt"
+    )
+    custom_system_prompt = _limit_script_text(
+        custom_system_prompt, MAX_SCRIPT_SYSTEM_PROMPT_LENGTH, "custom_system_prompt"
+    )
+    logger.info(
+        "generating long video script: "
+        f"subject={video_subject}, chapters={chapter_number}"
+    )
+
+    def call_llm(prompt: str) -> str:
+        if app_config is None:
+            return _generate_response(prompt=prompt)
+        return _generate_response(prompt=prompt, app_config=app_config)
+
+    # 1) 规划章节大纲：只要求返回 JSON 数组，解析失败则回退到单次生成。
+    outline_prompt = f"""
+You are planning a long-form video script about: {video_subject}
+
+Return a JSON array of exactly {chapter_number} chapter titles that together
+tell a complete, well-structured story about the subject. Each title is a
+short phrase (3-10 words), not a full sentence.
+{"Respond in this language: " + language if language else "Respond in the same language as the video subject."}
+Return only the JSON array, nothing else.
+""".strip()
+
+    outline: List[str] = []
+    for attempt in range(3):
+        try:
+            response = call_llm(outline_prompt)
+            if isinstance(response, str) and response.startswith("Error: "):
+                raise ValueError(response)
+            parsed = _extract_embedded_json(_strip_code_fence(response or ""), "[")
+            if isinstance(parsed, list):
+                outline = [str(item).strip() for item in parsed if str(item).strip()]
+            if outline:
+                break
+        except Exception as e:
+            logger.error(f"failed to generate long script outline: {e}")
+            if attempt < 2:
+                logger.warning(f"retrying outline generation... {attempt + 1}")
+
+    if not outline:
+        logger.error("failed to generate long script outline after retries")
+        return ""
+
+    logger.info(f"long script outline: {utils.to_json(outline)}")
+
+    # 2) 逐章生成：每章携带完整大纲和上一章结尾，保证叙事连贯。
+    base_prompt = custom_system_prompt or DEFAULT_SCRIPT_SYSTEM_PROMPT
+    outline_text = json.dumps(outline, ensure_ascii=False)
+    chapters: List[str] = []
+    previous_tail = ""
+
+    for index, title in enumerate(outline, start=1):
+        prompt = base_prompt + f"""
+
+# Initialization:
+- video subject: {video_subject}
+- this script is chapter {index} of {len(outline)} of a long-form video: {title}
+- full chapter outline: {outline_text}
+- target length: about {LONG_SCRIPT_CHAPTER_TARGET_WORDS} words
+- write only this chapter as one or more paragraphs; do not repeat content from other chapters; do not write an introduction or conclusion for the whole video unless this is the first or last chapter
+"""
+        if language:
+            prompt += f"\n- language: {language}"
+        if previous_tail:
+            prompt += f"\n- continue naturally from the previous chapter, which ended with: {previous_tail}"
+        if video_script_prompt:
+            prompt += f"""
+
+# Additional User Requirements:
+{video_script_prompt}
+""".rstrip()
+
+        chapter_text = ""
+        for attempt in range(3):
+            try:
+                response = call_llm(prompt)
+                if isinstance(response, str) and response.startswith("Error: "):
+                    raise ValueError(response)
+                if response:
+                    candidate = _format_script_response(
+                        _strip_code_fence(response)
+                    ).strip()
+                else:
+                    candidate = ""
+                if candidate:
+                    chapter_text = candidate
+                    break
+            except Exception as e:
+                logger.error(f"failed to generate chapter {index}: {e}")
+                if attempt < 2:
+                    logger.warning(f"retrying chapter {index}... {attempt + 1}")
+
+        if not chapter_text:
+            logger.error(f"failed to generate chapter {index} after retries")
+            return ""
+
+        chapters.append(chapter_text)
+        # 保留上一章结尾片段作为下一章的衔接上下文。
+        previous_tail = chapter_text[-200:].replace("\n", " ").strip()
+        logger.info(f"chapter {index}/{len(outline)} completed")
+
+    final_script = "\n\n".join(chapters).strip()
+    logger.success(f"long script completed, {len(chapters)} chapters")
+    return final_script
+
+
 def generate_script(
     video_subject: str,
     language: str = "",
@@ -915,7 +1098,24 @@ def generate_script(
     video_script_prompt: str = "",
     custom_system_prompt: str = "",
     app_config=None,
+    long_mode: bool = False,
 ) -> str:
+    if long_mode:
+        # 长视频模式优先按章节生成；失败时回退到单次生成，保证任务不中断。
+        long_script = generate_long_script(
+            video_subject=video_subject,
+            language=language,
+            chapter_number=paragraph_number,
+            video_script_prompt=video_script_prompt,
+            custom_system_prompt=custom_system_prompt,
+            app_config=app_config,
+        )
+        if long_script:
+            return long_script
+        logger.warning(
+            "long script generation failed; falling back to single-pass generation"
+        )
+
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
         video_script_prompt, MAX_SCRIPT_PROMPT_LENGTH, "video_script_prompt"
@@ -938,40 +1138,6 @@ def generate_script(
         f"has_custom_system_prompt={bool(custom_system_prompt.strip())}"
     )
 
-    def format_response(response):
-        # Clean the script
-        # Remove emphasis and heading markers without changing inline names
-        # or musical notes such as C#, F# and G#.
-        response = response.replace("*", "")
-        response = re.sub(
-            r"(?m)^[ \t]{0,3}#{1,6}[ \t]+(.*?)[ \t]*$",
-            lambda match: re.sub(r"[ \t]+#+[ \t]*$", "", match.group(1)),
-            response,
-        )
-
-        # Link labels are narration; discard destinations before stripping
-        # bracketed stage directions. Common parenthesized URL components fit.
-        response = re.sub(
-            r"\[([^\]\n]+)\]\((?:[^()\n]|\([^()\n]*\))*\)",
-            lambda match: match.group(1),
-            response,
-        )
-
-        # Remove markdown syntax.  Use non-greedy .*? so each bracket/paren
-        # group is removed independently; the greedy form would eat all text
-        # between the first opener and the last closer on the same line.
-        response = re.sub(r"\[.*?\]", "", response)
-        response = re.sub(r"\(.*?\)", "", response)
-
-        # Split the script into paragraphs
-        paragraphs = response.split("\n\n")
-
-        # Select the specified number of paragraphs
-        # selected_paragraphs = paragraphs[:paragraph_number]
-
-        # Join the selected paragraphs into a single string
-        return "\n\n".join(paragraphs)
-
     for i in range(_max_retries):
         try:
             if app_config is None:
@@ -983,7 +1149,9 @@ def generate_script(
                 # that text through would make the task treat it as narration.
                 raise ValueError(response)
             if response:
-                candidate = format_response(_strip_code_fence(response)).strip()
+                candidate = _format_script_response(
+                    _strip_code_fence(response)
+                ).strip()
             else:
                 logging.error("gpt returned an empty response")
                 candidate = ""
