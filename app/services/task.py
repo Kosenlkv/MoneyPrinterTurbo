@@ -371,6 +371,7 @@ def generate_script(task_id, params):
             paragraph_number=params.paragraph_number,
             video_script_prompt=params.video_script_prompt,
             custom_system_prompt=params.custom_system_prompt,
+            long_mode=getattr(params, "long_video_mode", False),
         )
     else:
         logger.debug(f"video script: \n{video_script}")
@@ -392,7 +393,11 @@ def generate_terms(task_id, params, video_script):
         video_terms = llm.generate_terms(
             video_subject=params.video_subject,
             video_script=utils.remove_pause_tags(video_script),
-            amount=8 if params.match_materials_to_script else 5,
+            amount=(
+                min(30, max(8, int(params.paragraph_number) * 2))
+                if getattr(params, "long_video_mode", False)
+                else 8 if params.match_materials_to_script else 5
+            ),
             match_script_order=params.match_materials_to_script,
         )
     else:
