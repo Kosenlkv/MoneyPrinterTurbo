@@ -76,12 +76,50 @@ def is_enabled(settings: Optional[dict] = None) -> bool:
 
 
 def dimensions_for_aspect(aspect_hint: str) -> tuple:
-    """Width/height for an aspect hint ("9:16", "16:9", "1:1")."""
+    """Request width/height for an aspect hint ("9:16", "16:9", "1:1")."""
     if aspect_hint == "16:9":
-        return (1280, 720)
+        return (1920, 1080)
     if aspect_hint == "1:1":
-        return (1024, 1024)
-    return (720, 1280)
+        return (1080, 1080)
+    return (1080, 1920)
+
+
+def target_dimensions_for_aspect(aspect_hint: str) -> tuple:
+    """Frame-sized output dimensions the saved image is upscaled to.
+
+    The anonymous tier caps responses at 576x1024 whatever you ask for;
+    upscaling to the frame size here keeps the zoom-clip renderer working
+    at native output resolution instead of stretching at composition time.
+    """
+    return dimensions_for_aspect(aspect_hint)
+
+
+def _upscale_to_frame(image_bytes: bytes, target: tuple) -> bytes:
+    """Upscale a small response to the frame size (Lanczos), no-op if large."""
+    import io
+
+    from PIL import Image
+
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        image.load()
+    except Exception:
+        return image_bytes
+    tw, th = target
+    if image.width >= tw or image.height >= th:
+        return image_bytes
+    # Preserve the source aspect ratio: scale to cover, then center-crop.
+    scale = max(tw / image.width, th / image.height)
+    resized = image.resize(
+        (max(tw, round(image.width * scale)), max(th, round(image.height * scale))),
+        Image.LANCZOS,
+    )
+    left = (resized.width - tw) // 2
+    top = (resized.height - th) // 2
+    cropped = resized.crop((left, top, left + tw, top + th))
+    buffer = io.BytesIO()
+    cropped.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def generate_image(prompt: str, *, aspect_hint: str = "") -> Optional[bytes]:
@@ -128,7 +166,9 @@ def generate_image(prompt: str, *, aspect_hint: str = "") -> Optional[bytes]:
         status = response.status_code
         content_type = (response.headers.get("content-type") or "").lower()
         if status == 200 and content_type.startswith("image/") and response.content:
-            return response.content
+            return _upscale_to_frame(
+                response.content, target_dimensions_for_aspect(aspect_hint)
+            )
 
         last_detail = f"HTTP {status}: {response.text[:300]}"
         if status == FREE_LIMIT_STATUS and "FREE_LIMIT" in response.text:
